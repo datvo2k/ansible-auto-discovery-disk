@@ -1,0 +1,28 @@
+---
+# Default variables for disk discovery
+discovery:
+  scan_interval: 5  # seconds
+  max_retries: 3
+  timeout: 60
+
+  # Disk filters
+  min_size_bytes: 1073741824  # 1GB
+  max_size_bytes: 10995116277760  # 10TB
+  exclude_patterns:
+    - "loop*"
+    - "sr*"
+    - "cdrom*"
+
+  # System disk detection
+  system_disk_patterns:
+    - "/dev/sda"
+    - "/dev/vda"
+    - "/dev/xvda"
+    - "/dev/nvme0n1"
+    - "/vdb"
+
+required_packages:
+  - parted
+  - gdisk
+  - xfsprogs
+  - e2fsprogs

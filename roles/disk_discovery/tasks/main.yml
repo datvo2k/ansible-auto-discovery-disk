@@ -1,0 +1,91 @@
+---
+- name: Install required packages for disk discovery
+  package:
+    name: "{{ required_packages }}"
+    state: present
+  tags:
+    - packages
+    - disk_discovery
+
+- name: Gather system facts
+  setup:
+    gather_subset:
+      - hardware
+      - devices
+  tags: disk_discovery
+
+- name: Rescan SCSI bus for new devices
+  shell: |
+    for host in /sys/class/scsi_host/host*; do
+      echo "- - -" > ${host}/scan
+    done
+  changed_when: false
+  tags: disk_discovery
+
+- name: Wait for device discovery
+  pause:
+    seconds: "{{ discovery.scan_interval }}"
+  tags: disk_discovery
+
+- name: Get detailed block device information
+  command: lsblk -J -o NAME,SIZE,TYPE,MOUNTPOINT,FSTYPE,UUID,LABEL,MODEL,SERIAL
+  register: lsblk_json
+  changed_when: false
+  tags: disk_discovery
+
+- name: Parse block device information
+  set_fact:
+    all_block_devices: "{{ (lsblk_json.stdout | from_json).blockdevices }}"
+  tags: disk_discovery
+
+- name: Get partition information for each disk
+  parted:
+    device: "/dev/{{ item.name }}"
+    state: info
+  register: parted_results
+  loop: "{{ all_block_devices }}"
+  when:
+    - item.type == "disk"
+    - item.name not in discovery.exclude_patterns | join(',')
+    - item.size | regex_replace('[^0-9.]', '') | float * 1024**3 >= discovery.min_size_bytes
+  failed_when: false
+  tags: disk_discovery
+
+- name: Identify available disks
+  set_fact:
+    available_disks: >-
+      {{
+        parted_results.results |
+        selectattr('skipped', 'undefined') |
+        selectattr('disk', 'defined') |
+        selectattr('partitions', 'defined') |
+        selectattr('partitions', '==', []) |
+        map(attribute='item.name') |
+        list
+      }}
+  tags: disk_discovery
+
+- name: Filter out system disks
+  set_fact:
+    available_non_system_disks: >-
+      {{
+        available_disks |
+        reject('match', '^(sda|vda|xvda|nvme0n1)$') |
+        list
+      }}
+  when: discovery.exclude_system_disks | default(true)
+  tags: disk_discovery
+
+- name: Set final available disks list
+  set_fact:
+    discovered_disks: "{{ available_non_system_disks | default(available_disks) }}"
+  tags: disk_discovery
+
+- name: Display discovered disks
+  debug:
+    msg: |
+      Discovered {{ discovered_disks | length }} available disk(s):
+      {% for disk in discovered_disks %}
+      - /dev/{{ disk }}
+      {% endfor %}
+  tags: disk_discovery

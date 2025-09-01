@@ -1,0 +1,20 @@
+---
+- name: Add and Configure Disks
+  hosts: all
+  become: true
+  gather_facts: true
+  serial: "{{ batch_size | default(1) }}"
+
+  pre_tasks:
+    - name: Verify system requirements
+      include_role:
+        name: system_prep
+      tags: preparation
+
+  tasks:
+    - name: Run disk management
+      include_role:
+        name: disk_management
+      tags:
+        - disk_management
+        - main

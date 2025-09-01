@@ -1,0 +1,20 @@
+---
+- name: Disk Discovery Playbook
+  hosts: all
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Run disk discovery
+      include_role:
+        name: disk_discovery
+      tags: discovery
+
+    - name: Generate discovery summary
+      debug:
+        msg: |
+          === Disk Discovery Summary ===
+          Host: {{ inventory_hostname }}
+          Discovered disks: {{ discovered_disks | length }}
+          Available disks: {{ discovered_disks | join(', ') if discovered_disks else 'None' }}
+      tags: summary

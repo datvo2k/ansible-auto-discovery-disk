@@ -1,0 +1,9 @@
+[all]
+machine_1   ansible_host=
+machine_2   ansible_host=
+machine_3   ansible_host=
+
+[all:vars]
+ansible_ssh_private_key_file=~/.ssh/
+ansible_ssh_common_args='-o StrictHostKeyChecking=no'
+ansible_user=
