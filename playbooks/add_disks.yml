@@ -1,20 +1,16 @@
 ---
-- name: Add and Configure Disks
+- name: Disk Management Playbook
   hosts: all
-  become: true
-  gather_facts: true
-  serial: "{{ batch_size | default(1) }}"
+  become: yes
+  gather_facts: yes
 
   pre_tasks:
-    - name: Verify system requirements
-      include_role:
-        name: system_prep
-      tags: preparation
-
-  tasks:
-    - name: Run disk management
-      include_role:
-        name: disk_management
+    - name: Check if running as root or with sudo
+      fail:
+        msg: "This playbook requires root privileges"
+      when: ansible_effective_user_id != 0
+  roles:
+    - role: disk_management
       tags:
-        - disk_management
-        - main
+        - disk
+        - storage

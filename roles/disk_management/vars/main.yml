@@ -1,0 +1,2 @@
+disk_device: "/dev/vdb"
+mount_point: "/data"

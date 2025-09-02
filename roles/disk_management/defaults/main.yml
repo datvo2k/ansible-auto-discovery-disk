@@ -1,0 +1,14 @@
+---
+disk_device: "/dev/vdb"
+mount_point: "/data"
+filesystem_type: "ext4"
+mount_options: "defaults"
+force_format: false
+create_backup: false
+
+mount_point_owner: "root"
+mount_point_group: "root"
+mount_point_mode: "0755"
+
+filesystem_opts: ""
+check_filesystem: true

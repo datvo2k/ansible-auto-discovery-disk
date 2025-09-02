@@ -1,143 +1,87 @@
 ---
-- name: Include disk discovery role
-  include_role:
-    name: disk_discovery
-  tags: discovery
+- name: Check if disk is already mounted
+  mount:
+    path: "{{ mount_point }}"
+    state: absent
+  check_mode: yes
+  register: mount_check
 
-- name: Fail if no disks discovered
-  fail:
-    msg: "No available disks found for management"
-  when: discovered_disks | length == 0
-  tags: validation
+- name: Backup existing fstab
+  copy:
+    src: /etc/fstab
+    dest: /etc/fstab.backup.{{ ansible_date_time.epoch }}
+    remote_src: yes
+  when: create_backup | bool
 
-- name: Create partition table on discovered disks
-  parted:
-    device: "/dev/{{ item }}"
-    label: "{{ disk_config.partition_table }}"
-    state: present
-  loop: "{{ discovered_disks }}"
-  register: partition_table_created
-  tags:
-    - partitioning
-    - disk_management
-
-- name: Create primary partition spanning entire disk
-  parted:
-    device: "/dev/{{ item }}"
-    number: 1
-    state: present
-    part_start: "0%"
-    part_end: "100%"
-    align: "{{ disk_config.alignment }}"
-  loop: "{{ discovered_disks }}"
-  register: partitions_created
-  tags:
-    - partitioning
-    - disk_management
-
-- name: Wait for partition device files
-  wait_for:
-    path: "/dev/{{ item }}1"
-    timeout: 30
-    state: present
-  loop: "{{ discovered_disks }}"
-  tags:
-    - partitioning
-    - disk_management
-
-- name: Create filesystems on new partitions
-  filesystem:
-    fstype: "{{ group_disk_config.filesystem | default(disk_config.filesystem) }}"
-    dev: "/dev/{{ item }}1"
-    opts: "{{ disk_config.filesystem_options[group_disk_config.filesystem | default(disk_config.filesystem)] | default('') }}"
-  loop: "{{ discovered_disks }}"
-  register: filesystems_created
-  tags:
-    - formatting
-    - disk_management
-
-- name: Generate mount points
-  set_fact:
-    mount_points: >-
-      {{
-        discovered_disks |
-        map('regex_replace', '^(.*)$', mount_base_path + '/disk\1') |
-        list
-      }}
-  vars:
-    mount_base_path: "{{ group_disk_config.mount_prefix | default(disk_config.mount_base) }}"
-  tags: disk_management
-
-- name: Create mount point directories
-  file:
-    path: "{{ item }}"
-    state: directory
-    owner: "{{ disk_config.default_owner }}"
-    group: "{{ disk_config.default_group }}"
-    mode: "{{ disk_config.default_mode }}"
-  loop: "{{ mount_points }}"
-  tags:
-    - mounting
-    - disk_management
-
-- name: Get UUIDs of new filesystems
-  command: "blkid -s UUID -o value /dev/{{ item }}1"
-  register: filesystem_uuids
-  loop: "{{ discovered_disks }}"
+- name: Check if disk already has a filesystem
+  command: "blkid {{ disk_device }}"
+  register: existing_filesystem
+  failed_when: false
   changed_when: false
-  tags:
-    - mounting
-    - disk_management
 
-- name: Mount new filesystems
-  mount:
-    path: "{{ mount_points[item_index] }}"
-    src: "/dev/{{ item }}1"
-    fstype: "{{ group_disk_config.filesystem | default(disk_config.filesystem) }}"
-    opts: "{{ group_disk_config.mount_options | default(disk_config.mount_options) }}"
-    state: mounted
-  loop: "{{ discovered_disks }}"
-  loop_control:
-    index_var: item_index
-  tags:
-    - mounting
-    - disk_management
+- name: Display warning if filesystem exists
+  debug:
+    msg: "WARNING: Filesystem already exists on {{ disk_device }}. Use force_format=true to overwrite."
+  when:
+    - existing_filesystem.rc == 0
+    - not force_format | bool
 
-- name: Add persistent fstab entries
-  mount:
-    path: "{{ mount_points[item_index] }}"
-    src: "UUID={{ filesystem_uuids.results[item_index].stdout }}"
-    fstype: "{{ group_disk_config.filesystem | default(disk_config.filesystem) }}"
-    opts: "{{ group_disk_config.mount_options | default(disk_config.mount_options) }}"
-    dump: 0
-    passno: 2
-    state: present
-  loop: "{{ discovered_disks }}"
-  loop_control:
-    index_var: item_index
-  when: disk_config.create_fstab_entries | default(true)
-  tags:
-    - mounting
-    - disk_management
-    - fstab
+- name: Create filesystem on disk
+  filesystem:
+    fstype: "{{ filesystem_type }}"
+    dev: "{{ disk_device }}"
+    force: "{{ force_format | bool }}"
+    opts: "{{ filesystem_opts if filesystem_opts else omit }}"
+  register: filesystem_creation
+  when: existing_filesystem.rc != 0 or force_format | bool
 
-- name: Set final ownership and permissions
+- name: Get UUID of the filesystem
+  command: "blkid -s UUID -o value {{ disk_device }}"
+  register: disk_uuid_result
+  changed_when: false
+  failed_when: disk_uuid_result.rc != 0
+
+- name: Create mount point directory
   file:
-    path: "{{ item }}"
-    owner: "{{ group_disk_config.owner | default(disk_config.default_owner) }}"
-    group: "{{ group_disk_config.group | default(disk_config.default_group) }}"
-    mode: "{{ group_disk_config.mode | default(disk_config.default_mode) }}"
-    recurse: false
-  loop: "{{ mount_points }}"
-  tags:
-    - permissions
-    - disk_management
+    path: "{{ mount_point }}"
+    state: directory
+    owner: "{{ mount_point_owner }}"
+    group: "{{ mount_point_group }}"
+    mode: "{{ mount_point_mode }}"
 
-- name: Generate disk management report
-  template:
-    src: disk_report.j2
-    dest: "/tmp/disk_report_{{ inventory_hostname }}_{{ ansible_date_time.epoch }}.txt"
-    mode: '0644'
-  tags:
-    - reporting
-    - disk_management
+- name: Mount filesystem temporarily
+  mount:
+    path: "{{ mount_point }}"
+    src: "UUID={{ disk_uuid_result.stdout }}"
+    fstype: "{{ filesystem_type }}"
+    opts: "{{ mount_options }}"
+    state: mounted
+
+- name: Add to fstab for persistent mounting
+  mount:
+    path: "{{ mount_point }}"
+    src: "UUID={{ disk_uuid_result.stdout }}"
+    fstype: "{{ filesystem_type }}"
+    opts: "{{ mount_options }}"
+    state: present
+  notify: reload systemd
+
+- name: Verify mount is working
+  command: "findmnt {{ mount_point }}"
+  register: mount_verify
+  changed_when: false
+
+- name: Set filesystem facts
+  set_fact:
+    disk_uuid: "{{ disk_uuid_result.stdout }}"
+    mount_status: "{{ 'mounted' if mount_verify.rc == 0 else 'failed' }}"
+
+- name: Display disk setup results
+  debug:
+    msg:
+      - "Disk setup completed successfully"
+      - "Device: {{ disk_device }}"
+      - "UUID: {{ disk_uuid }}"
+      - "Mount Point: {{ mount_point }}"
+      - "Filesystem: {{ filesystem_type }}"
+      - "Mount Status: {{ mount_status }}"
